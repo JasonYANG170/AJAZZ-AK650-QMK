@@ -1,5 +1,7 @@
 # AJAZZ AK650 QMK
 
+[English](README.en.md)
+
 | 项目 | 规格 |
 | --- | --- |
 | 型号 | 黑爵 AK650 三模带屏版 |
