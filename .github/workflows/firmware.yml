@@ -1,0 +1,97 @@
+name: Build AK650 firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build VIA firmware
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git make gcc gcc-arm-none-eabi libnewlib-arm-none-eabi libhidapi-hidraw0 python3-venv
+
+      - name: Compile firmware
+        run: bash scripts/build.sh via
+
+      - name: Package firmware and VIA layout
+        shell: bash
+        run: |
+          board=.build/qmk/keyboards/a_jazz/ak650/reference/keyboard.json
+          version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["usb"]["device_version"])' "$board")"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid firmware version: $version" >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Release tag must be v$version, got $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+          name="AK650-VIA-$version"
+          test "$(stat -c %s dist/AK650-via.bin)" -eq 262144
+          mkdir dist/release
+          cp dist/AK650-via.bin "dist/release/$name.bin"
+          cp dist/AK650-VIA.json "dist/release/$name.json"
+          cd dist/release
+          sha256sum "$name.bin" "$name.json" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: AK650-VIA
+          path: dist/release/
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: ak650-release-${{ github.ref }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: AK650-VIA
+          path: release
+
+      - name: Publish firmware and layout
+        shell: bash
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          sha256sum -c SHA256SUMS
+          name="AK650-VIA-${TAG#v}"
+          assets=("$name.bin" "$name.json" SHA256SUMS)
+          if draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [[ "$draft" == true ]]; then
+              gh release upload "$TAG" "${assets[@]}" --clobber
+              gh release edit "$TAG" --draft=false
+            else
+              echo "Release $TAG is already published."
+            fi
+          else
+            gh release create "$TAG" "${assets[@]}" --verify-tag --title "AK650 QMK $TAG" --generate-notes
+          fi
