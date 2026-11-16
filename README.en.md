@@ -46,4 +46,3 @@ To flash a locally built image, run the following command.
 py scripts/flash.py dist/AK650-via.bin --checksums dist/AK650-via.bin.sha256
 ```
 
-On older QMK/VIA firmware, you can temporarily map Esc on the Fn layer to `QK_BOOT`, then press Fn+Esc to enter flashing mode. The procedure for entering ISP mode from the factory firmware is still unconfirmed.
