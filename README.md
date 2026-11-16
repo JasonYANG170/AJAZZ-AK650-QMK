@@ -37,4 +37,3 @@ py scripts/flash.py
 
 刷入本地构建的镜像时，运行 `py scripts/flash.py dist/AK650-via.bin --checksums dist/AK650-via.bin.sha256`。
 
-旧版 QMK/VIA 可临时把 Fn 层的 Esc 设为 `QK_BOOT`，再按 Fn+Esc 进入刷机模式。原厂固件的 ISP 进入方式待确认。
