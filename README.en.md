@@ -15,7 +15,7 @@ QMK firmware with VIA support for the AJAZZ AK650 tri-mode keyboard with a built
 
 ## Firmware downloads
 
-Open a successful run from the [firmware workflow](https://github.com/JasonYANG170/AJAZZ-AK650-QMK/actions/workflows/firmware.yml) and download `AK650-VIA` from **Artifacts**. The archive contains the firmware binary, the VIA layout JSON, and `SHA256SUMS`. The workflow publishes these files to [Releases](https://github.com/JasonYANG170/AJAZZ-AK650-QMK/releases) when a pushed tag matches the firmware version, for example `v0.3.5`.
+Open a successful run from the [firmware workflow](https://github.com/JasonYANG170/AJAZZ-AK650-QMK/actions/workflows/firmware.yml) and download `AK650-VIA` from **Artifacts**. The archive contains the firmware binary, the VIA layout JSON, and `SHA256SUMS`. A successful build triggered by a push to `main` or a manual run on `main` also publishes these files to [Releases](https://github.com/JasonYANG170/AJAZZ-AK650-QMK/releases). Release tags use `build-YYYYMMDD-<short-commit>` with the date in UTC.
 
 ## Build from source
 

@@ -22,7 +22,7 @@ sudo apt install -y git make gcc gcc-arm-none-eabi libnewlib-arm-none-eabi libhi
 bash scripts/build.sh via
 ```
 
-固件和 VIA 布局分别生成到 `dist/AK650-via.bin` 和 `dist/AK650-VIA.json`。GitHub Actions 构建产物可在 **Artifacts** 下载，推送与固件版本一致的标签会生成 **Release**。
+固件和 VIA 布局分别生成到 `dist/AK650-via.bin` 和 `dist/AK650-VIA.json`。GitHub Actions 构建产物可在 **Artifacts** 下载。推送到 `main` 或在该分支手动运行工作流后，构建成功会自动发布到 [Releases](https://github.com/JasonYANG170/AJAZZ-AK650-QMK/releases)。发布标签使用 `build-YYYYMMDD-短提交号`，日期采用 UTC。
 
 ## 刷机
 
