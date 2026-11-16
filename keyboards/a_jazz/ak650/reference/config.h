@@ -7,6 +7,7 @@
 #define LED_WINLOCK_PIN B18
 #define AK820PRO_DISCRETE_WIN_LED 1
 #define AK820PRO_DISCRETE_CHARGE_LED 0
+#define BT_PAIR_HOLD_MS 3000
 #define AK820PRO_OS_SWITCH_INVERTED 1
 #define AK820PRO_LCD_ROTATION QP_ROTATION_180
 // GC9107's 128x128 active area in this orientation starts at column 2, row 1.

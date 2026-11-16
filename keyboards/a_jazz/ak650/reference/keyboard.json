@@ -11,6 +11,10 @@
     "dynamic_keymap": {
         "layer_count": 4
     },
+    "indicators": {
+        "caps_lock": "B0",
+        "on_state": 1
+    },
     "features": {
         "audio": false,
         "backlight": false,

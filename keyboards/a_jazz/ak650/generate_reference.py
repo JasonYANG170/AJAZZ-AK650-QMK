@@ -88,7 +88,7 @@ def generate():
     keyboard["usb"] = {"vid": VID, "pid": PID, "device_version": "0.3.5"}
     keyboard["layouts"] = {"LAYOUT_67_ansi": {"layout": layout}}
     keyboard["rgb_matrix"]["layout"] = led_layout
-    keyboard.pop("indicators")
+    keyboard["indicators"] = {"caps_lock": "B0", "on_state": 1}
     # The AK650 lit all keys with this steady white setting during the wired test.
     keyboard["rgb_matrix"]["default"].update(on=True, sat=0, val=32)
     # Keep QMK's matrix-based bootloader shortcut disabled for the reference layout.
@@ -98,6 +98,12 @@ def generate():
     via["vendorId"] = VID
     via["productId"] = PID
     via["layouts"] = {"keymap": via_layout(layout)}
+    via["customKeycodes"].extend([
+        {"name": "AK650_FN_ESC", "title": "Grave / Shift: toggle number row", "shortName": "Grave/Fn"},
+        {"name": "AK650_RESET", "title": "Restore defaults (hold 3 seconds)", "shortName": "Reset"},
+        {"name": "AK650_ZH", "title": "Screen language: Chinese", "shortName": "Chinese"},
+        {"name": "AK650_EN", "title": "Screen language: English", "shortName": "English"},
+    ])
     for file, data in (("keyboard.json", keyboard), ("via.json", via)):
         (REFERENCE / file).write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8")
 

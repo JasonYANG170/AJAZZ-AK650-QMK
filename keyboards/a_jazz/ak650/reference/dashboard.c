@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include QMK_KEYBOARD_H
-#include "ak820pro.h"
+#include "ak650.h"
 #include "bluetooth/ch582f_ajazz.h"
 #include "graphics/display.h"
 #include "graphics/lcd_bus.h"
+#include <lib/lib8tion/lib8tion.h>
 #include "media/media.h"
 #include "qp_surface.h"
 #include "fonts/ak650_sc_16.qff.h"
@@ -16,13 +17,21 @@
 #define MENU_IDLE_MS 20000
 #define LEGACY_PREFERENCES_SIGNATURE 0x414B6500u
 #define PREFERENCES_SIGNATURE 0x414C0000u
-#define PREFERENCES_MASK 0x1FFFu
+#define PREFERENCES_MASK 0x3FFFu
 #define LANGUAGE_SHIFT 4
 #define APPEARANCE_SHIFT 5
 #define BACKLIGHT_SHIFT 7
 #define SLEEP_SHIFT 10
+#define NUMBER_ROW_SHIFT 13
 #define KNOB_ROW 1
 #define KNOB_COL 14
+#define RESET_HOLD_MS 3000
+#define RESET_FLASH_MS 180
+
+// The stock V1.05 power-state routine samples B17 (external power) and B16
+// (charge complete with external power present). Leave both as inputs.
+#define CHARGE_PRESENT_PIN B17
+#define CHARGE_COMPLETE_PIN B16
 
 enum setting {
     LIGHTING,
@@ -116,6 +125,36 @@ static uint32_t knob_started;
 static uint16_t knob_tap;
 static bool knob_handled;
 static bool knob_held;
+static bool fkeys_first;
+static bool grave_held;
+static uint8_t remapped_number_row[12];
+static bool reset_held;
+static bool reset_confirmed;
+static uint32_t reset_started;
+static uint32_t reset_flash_started;
+
+enum charge_state { ON_BATTERY, CHARGING, CHARGE_COMPLETE };
+static enum charge_state charge_state;
+
+void keyboard_post_init_user(void) {
+    gpio_set_pin_input(CHARGE_PRESENT_PIN);
+    gpio_set_pin_input(CHARGE_COMPLETE_PIN);
+}
+
+static void update_charge_state(void) {
+    static enum charge_state sample;
+    static uint32_t sample_since;
+    enum charge_state current = ON_BATTERY;
+    if (gpio_read_pin(CHARGE_PRESENT_PIN)) {
+        current = gpio_read_pin(CHARGE_COMPLETE_PIN) ? CHARGE_COMPLETE : CHARGING;
+    }
+    if (current != sample) {
+        sample = current;
+        sample_since = timer_read32();
+    } else if (timer_elapsed32(sample_since) >= 50) {
+        charge_state = sample;
+    }
+}
 
 static const char *translated(translation_t value) { return english ? value.en : value.zh; }
 static const char *tr(const char *en, const char *zh) { return translated((translation_t){en, zh}); }
@@ -287,7 +326,113 @@ bool pre_process_record_user(uint16_t keycode, keyrecord_t *record) {
     return false;
 }
 
+bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    bool pressed = record->event.pressed;
+    switch (keycode) {
+        case AK650_FN_ESC:
+            if (pressed) {
+                if (get_mods() & MOD_MASK_SHIFT) {
+                    fkeys_first = !fkeys_first;
+                    preferences_pending = true;
+                    activity = timer_read32();
+                } else {
+                    grave_held = true;
+                    register_code(KC_GRV);
+                }
+            } else if (grave_held) {
+                grave_held = false;
+                unregister_code(KC_GRV);
+            }
+            return false;
+        case AK650_RESET:
+            reset_held = pressed;
+            if (pressed) reset_started = timer_read32();
+            return false;
+        case AK650_ZH:
+        case AK650_EN:
+            if (pressed) {
+                english = keycode == AK650_EN;
+                preferences_pending = true;
+                activity = timer_read32();
+                redraw = true;
+            }
+            return false;
+    }
+
+    uint8_t col = record->event.key.col;
+    if (!IS_KEYEVENT(record->event) || record->event.key.row != 1 || col < 1 || col > 12) return true;
+
+    static const uint8_t numbers[] = {
+        KC_1, KC_2, KC_3, KC_4, KC_5, KC_6, KC_7, KC_8, KC_9, KC_0, KC_MINS, KC_EQL,
+    };
+    uint8_t index = col - 1;
+    uint8_t *mapped = &remapped_number_row[index];
+    if (!pressed && *mapped) {
+        unregister_code(*mapped);
+        *mapped = 0;
+        return false;
+    }
+    if (!pressed || !fkeys_first) return true;
+    uint8_t function = KC_F1 + index;
+    if (keycode == numbers[index]) {
+        *mapped = function;
+    } else if (keycode == function) {
+        *mapped = numbers[index];
+    } else {
+        return true; // A VIA override takes precedence.
+    }
+    register_code(*mapped);
+    return false;
+}
+
+bool rgb_matrix_indicators_kb(void) {
+    if (reset_confirmed) {
+        uint8_t white = (timer_elapsed32(reset_flash_started) / RESET_FLASH_MS) % 2 == 0 ? 80 : 0;
+        rgb_matrix_set_color_all(white, white, white);
+        return false;
+    }
+    if (ch582_is_usb()) return rgb_matrix_indicators_user();
+
+    static ch582_conn_state_t last_state;
+    static uint8_t last_col;
+    static uint32_t changed;
+    static const rgb_t colors[] = {{0, 0, 255}, {0, 220, 255}, {155, 0, 255}, {0, 255, 0}};
+    uint8_t col = ch582_is_24g() ? 4 : ch582_get_target_slot();
+    ch582_conn_state_t state = ch582_get_conn_state();
+    if (state != last_state || col != last_col) {
+        changed = timer_read32();
+        last_state = state;
+        last_col = col;
+    }
+    if (col < 1 || col > ARRAY_SIZE(colors)) return rgb_matrix_indicators_user();
+    uint32_t elapsed = timer_elapsed32(changed);
+    bool pairing = state == CH582_CONN_PAIRING && elapsed < 30000;
+    bool linking = state == CH582_CONN_LINKING && elapsed < 10000;
+    if (pairing || linking || (state == CH582_CONN_CONNECTED && elapsed < 1000)) {
+        bool on = !(pairing || linking) || (elapsed / (pairing ? 150u : 500u)) % 2 == 0;
+        uint8_t brightness = on ? MAX(32, rgb_matrix_get_val()) : 0;
+        rgb_t color = colors[col - 1];
+        uint8_t index = g_led_config.matrix_co[2][col]; // Q, W, E, R.
+        if (index < RGB_MATRIX_LED_COUNT) {
+            rgb_matrix_set_color(index, scale8(color.r, brightness), scale8(color.g, brightness),
+                                scale8(color.b, brightness));
+        }
+    }
+    return rgb_matrix_indicators_user();
+}
+
 void housekeeping_task_user(void) {
+    update_charge_state();
+    if (!reset_confirmed && reset_held && timer_elapsed32(reset_started) >= RESET_HOLD_MS) {
+        reset_confirmed = true;
+        reset_flash_started = timer_read32();
+        rgb_matrix_enable_noeeprom();
+    }
+    if (reset_confirmed && timer_elapsed32(reset_flash_started) >= 6 * RESET_FLASH_MS && !lcd_blit_busy()) {
+        eeconfig_disable();
+        soft_reset_keyboard();
+        return;
+    }
     if (!preferences_loaded) {
         uint32_t saved = eeconfig_read_user();
         bool current_format = (saved & ~PREFERENCES_MASK) == PREFERENCES_SIGNATURE;
@@ -298,8 +443,9 @@ void housekeeping_task_user(void) {
             if (theme < ARRAY_SIZE(appearances)) appearance = theme;
             uint8_t level = (saved >> BACKLIGHT_SHIFT) & 7u;
             if (level >= 1 && level <= DISPLAY_BACKLIGHT_LEVELS) backlight = level;
-            uint8_t timeout = (saved & PREFERENCES_MASK) >> SLEEP_SHIFT;
+            uint8_t timeout = (saved >> SLEEP_SHIFT) & 7u;
             if (timeout < ARRAY_SIZE(screen_timeouts)) screen_timeout = timeout;
+            fkeys_first = saved & (1u << NUMBER_ROW_SHIFT);
         } else if ((saved & ~0x3Fu) == LEGACY_PREFERENCES_SIGNATURE) {
             accent_color = saved & 1u;
             english = saved & 2u;
@@ -319,11 +465,12 @@ void housekeeping_task_user(void) {
         view = HOME;
         redraw = true;
     }
-    if (preferences_pending && timer_elapsed32(activity) >= 900 && !lcd_blit_busy()) {
+    if (!reset_confirmed && preferences_pending && timer_elapsed32(activity) >= 900 && !lcd_blit_busy()) {
         preferences_pending = false;
         eeconfig_update_user(PREFERENCES_SIGNATURE | accent_color | (english << LANGUAGE_SHIFT) |
                              (appearance << APPEARANCE_SHIFT) |
-                             (backlight << BACKLIGHT_SHIFT) | (screen_timeout << SLEEP_SHIFT));
+                             (backlight << BACKLIGHT_SHIFT) | (screen_timeout << SLEEP_SHIFT) |
+                             (fkeys_first << NUMBER_ROW_SHIFT));
     }
     display_pump_ak650();
 }
@@ -342,7 +489,7 @@ typedef struct {
 
 #define SCREEN_WIDTH 128
 #define TILE_HEIGHT 34
-#define SPI_SLICE_ROWS 8
+#define SPI_SLICE_ROWS 4
 #define HEADER_HEIGHT 28
 #define MENU_ROW_HEIGHT 24
 #define MENU_ROWS 3
@@ -443,6 +590,7 @@ static void bar(const canvas_t *ui, uint8_t y, uint8_t percent, ink_t fill) {
 
 typedef struct {
     uint8_t connection, slot, battery, flags;
+    enum charge_state charge;
     char title[8], date[8];
 } home_t;
 
@@ -454,6 +602,7 @@ static home_t home_state(bool mac, uint8_t connection, bool media) {
         .connection = connection,
         .slot = connection == 1 && wireless_link ? ch582_get_slot() : 0,
         .battery = ch582_get_battery(),
+        .charge = charge_state,
         .flags = (mac ? MAC : 0) | (host_keyboard_led_state().caps_lock ? CAPS : 0) |
                  (keymap_config.no_gui ? WIN_LOCK : 0) |
                  (rgb_matrix_is_enabled() && !rgb_matrix_get_suspend_state() ? RGB_ON : 0) |
@@ -507,6 +656,7 @@ static void draw_media_line(const canvas_t *ui, uint8_t index) {
 
 enum { BAND_HEADER = 1, BAND_FIRST = 2, BAND_SECOND = 4, BAND_THIRD = 8, BAND_FOOTER = 16, BAND_PROGRESS = 32 };
 #define PAGE_BANDS (BAND_HEADER | BAND_FIRST | BAND_SECOND | BAND_THIRD | BAND_FOOTER)
+#define MENU_ITEM_BANDS (BAND_FIRST | BAND_SECOND | BAND_THIRD)
 
 static void draw_home(canvas_t *ui, const home_t *home, uint8_t progress, uint8_t band) {
     bool playing = home->flags & NOW_PLAYING;
@@ -544,12 +694,26 @@ static void draw_home(canvas_t *ui, const home_t *home, uint8_t progress, uint8_
         draw_icon(ui, 15, 5, icon_caps, home->flags & CAPS ? ui->accent : ui->palette->muted);
         draw_icon(ui, 46, 5, icon_light, home->flags & RGB_ON ? ui->accent : ui->palette->muted);
         draw_icon(ui, 77, 5, icon_lock, home->flags & WIN_LOCK ? ui->accent : ui->palette->muted);
-        if (home->battery <= 100) {
-            box(ui, 101, 5, 115, 13, ui->palette->muted);
-            box(ui, 102, 6, 114, 12, ui->palette->background);
-            box(ui, 116, 7, 117, 11, ui->palette->muted);
-            uint8_t fill = home->battery * 13 / 100;
-            if (fill) box(ui, 102, 6, 101 + fill, 12, ui->accent);
+        if (home->battery <= 100 || home->charge != ON_BATTERY) {
+            const ink_t red = {0, 235, 245}, yellow = {37, 230, 245}, green = {87, 225, 225};
+            uint8_t percent = home->charge == CHARGE_COMPLETE ? 100 : home->battery;
+            ink_t battery_color = percent < 20 ? red : percent < 80 ? yellow : green;
+            ink_t outline = percent < 20 ? red : ui->palette->muted;
+            box(ui, 100, 5, 115, 13, outline);
+            box(ui, 101, 6, 114, 12, ui->palette->background);
+            box(ui, 116, 7, 117, 11, outline);
+            if (percent <= 100) {
+                uint8_t segments = (percent + 19) / 20;
+                for (uint8_t i = 0; i < segments; ++i) {
+                    uint8_t x = 101 + 3 * i;
+                    box(ui, x, 7, x + 1, 11, battery_color);
+                }
+            }
+            if (home->charge == CHARGING) {
+                box(ui, 123, 3, 124, 6, yellow);
+                box(ui, 121, 7, 125, 8, yellow);
+                box(ui, 122, 9, 123, 12, yellow);
+            }
         }
         stage_tile(STATUS_Y, FOOTER_Y - STATUS_Y);
     }
@@ -666,13 +830,15 @@ static uint8_t home_changes(const home_t *home, uint8_t progress, bool media_cha
     if (flags & NOW_PLAYING || (playing ? media_changed : strcmp(home->title, last->title))) bands |= BAND_FIRST;
     if (flags & NOW_PLAYING || (playing ? media_changed : strcmp(home->date, last->date))) bands |= BAND_SECOND;
     if (playing && ((bands & BAND_SECOND) || (flags & PLAYING) || progress != refresh.progress)) bands |= BAND_PROGRESS;
-    if (flags & (CAPS | WIN_LOCK | RGB_ON) || home->battery != last->battery) bands |= BAND_THIRD;
+    if (flags & (CAPS | WIN_LOCK | RGB_ON) || home->battery != last->battery || home->charge != last->charge) {
+        bands |= BAND_THIRD;
+    }
     return bands;
 }
 
 static uint8_t menu_changes(bool lighting) {
     uint8_t first = first_menu_item(selected);
-    if (first != first_menu_item(refresh.selected)) return BAND_FIRST | BAND_SECOND | BAND_THIRD;
+    if (first != first_menu_item(refresh.selected)) return MENU_ITEM_BANDS;
 
     uint8_t bands = 0;
     if (selected != refresh.selected) {
@@ -743,6 +909,10 @@ void display_render_ak650_dashboard(painter_device_t panel, painter_font_handle_
     refresh.appearance = appearance;
 }
 
+bool display_ak650_needs_redraw(void) {
+    return redraw;
+}
+
 void display_send_ak650_slice(void) {
     if (redraw || !refresh.ui.tile) return;
 
@@ -762,7 +932,9 @@ void display_send_ak650_slice(void) {
         return;
     }
     if (!refresh.pending) return;
-    uint8_t band = refresh.pending & -refresh.pending;
+    uint8_t pending = refresh.pending;
+    if (refresh.view == MENU && (pending & MENU_ITEM_BANDS)) pending &= MENU_ITEM_BANDS;
+    uint8_t band = pending & -pending;
     refresh.pending &= ~band;
     switch (refresh.view) {
         case HOME: draw_home(&refresh.ui, &refresh.home, refresh.progress, band); break;

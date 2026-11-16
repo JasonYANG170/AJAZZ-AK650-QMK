@@ -30,7 +30,7 @@ index 01d04da6..1a69a3c3 100644
 \ No newline at end of file
 +#endif // SHARED_MATRIX
 diff --git a/keyboards/a_jazz/ak820pro/ak820pro.c b/keyboards/a_jazz/ak820pro/ak820pro.c
-index 7e3e46ea..4fbcb60f 100644
+index 7e3e46ea..f2146cd2 100644
 --- a/keyboards/a_jazz/ak820pro/ak820pro.c
 +++ b/keyboards/a_jazz/ak820pro/ak820pro.c
 @@ -16,6 +16,19 @@
@@ -53,7 +53,40 @@ index 7e3e46ea..4fbcb60f 100644
  // Current wireless mode, derived from the tri-state slider. The Fn BT controls
  // are only meaningful in the matching mode (e.g. Fn+Q selects a BT slot only
  // while the slider is in the BT position), so they are gated on this.
-@@ -67,7 +80,7 @@ static bool     bt_pair_armed = false;
+@@ -48,11 +61,27 @@ static void save_bt_profile(ch582_profile_t p) {
+     eeconfig_update_kb_datablock(&kb_config, 0, sizeof(kb_config));
+ }
+
+-// Fn+P long-press tracking: pairing only starts after a sustained hold, and
+-// only while in a wireless mode.
+-#define BT_PAIR_HOLD_MS 1000
+-static uint16_t bt_pair_timer = 0;
+-static bool     bt_pair_armed = false;
++#ifndef BT_PAIR_HOLD_MS
++#    define BT_PAIR_HOLD_MS 1000
++#endif
++static uint16_t bt_pair_timer;
++static uint16_t bt_pair_keycode = KC_NO;
++
++static void pair_key_down(uint16_t keycode) {
++    bt_pair_timer = timer_read();
++    bt_pair_keycode = keycode;
++}
++
++static void pair_key_up(uint16_t keycode) {
++    if (bt_pair_keycode == keycode) bt_pair_keycode = KC_NO;
++}
++
++static void pair_task(void) {
++    if (bt_pair_keycode != KC_NO && timer_elapsed(bt_pair_timer) >= BT_PAIR_HOLD_MS) {
++        bt_pair_keycode = KC_NO;
++        ch582_enter_pairing();
++    }
++}
+
+ #ifdef RGB_MATRIX_ENABLE
+ // Debounced RGB-config persistence. The RGBM_* keycodes change the live config
+@@ -67,7 +96,7 @@ static bool     bt_pair_armed = false;
  #    endif
  static bool     rgb_settle_pending = false;
  static uint32_t rgb_settle_timer   = 0;
@@ -62,7 +95,7 @@ index 7e3e46ea..4fbcb60f 100644
      rgb_settle_pending = true;
      rgb_settle_timer   = timer_read32();
  }
-@@ -93,14 +106,18 @@ void early_hardware_init_post(void) {
+@@ -93,14 +122,18 @@ void early_hardware_init_post(void) {
 
      // Windows Lock and Charging LEDs: outputs, off initially. update_leds() then
      // tracks their real state, writing only on a change.
@@ -81,7 +114,7 @@ index 7e3e46ea..4fbcb60f 100644
 
      // Restore persisted config. A fresh/invalid EEPROM zero-fills the block, so a
      // 0 (or out-of-range) bt_profile falls back to slot 1.
-@@ -130,6 +147,9 @@ void early_hardware_init_post(void) {
+@@ -130,6 +163,9 @@ void early_hardware_init_post(void) {
   }
 
   bool dip_switch_update_kb(uint8_t index, bool active) {
@@ -91,7 +124,87 @@ index 7e3e46ea..4fbcb60f 100644
      // Let the keymap handle layer logic (Mac/Win, no_gui) first.
      if(!dip_switch_update_user(index, active)) {
          return false;
-@@ -452,7 +472,7 @@ void via_custom_value_command_kb(uint8_t *data, uint8_t length) {
+@@ -147,6 +183,7 @@ void early_hardware_init_post(void) {
+         // wireless key forwarding. Recompute the mode from the latched pin states.
+         static bool bt_on  = false;
+         static bool g24_on = false;
++        bt_pair_keycode = KC_NO; // A physical mode change cancels a held pairing key.
+         if (index == 1) bt_on = active;
+         if (index == 2) g24_on = active;
+
+@@ -213,49 +250,36 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
+         case RGBM_SPI:  case RM_SPDU:  if (record->event.pressed) { rgb_matrix_increase_speed_noeeprom(); rgb_settle_arm(); } return false;
+         case RGBM_SPD:  case RM_SPDD:  if (record->event.pressed) { rgb_matrix_decrease_speed_noeeprom(); rgb_settle_arm(); } return false;
+ #endif
+-        /* BT slot keys use the @isuua/edthu devctrl model: TAP = select the slot
+-         * (A6 <slot>, reconnect the existing bond); HOLD = select + pair (adds
+-         * A6 0x51 on the held slot). Select happens on press for instant feedback;
+-         * the pair is added if the key is still held at BT_PAIR_HOLD_MS. This
+-         * replaces needing a separate pair key, though Fn+P still works. */
+-        case BT1:  // Fn+Q -> tap: select BT1 | hold: pair BT1
+-        case BT2:  // Fn+W -> tap: select BT2 | hold: pair BT2
+-        case BT3:  // Fn+E -> tap: select BT3 | hold: pair BT3
+-            if (record->event.pressed) {
+-                if (wireless_mode == WL_MODE_BT) {
+-                    ch582_profile_t slot = keycode == BT1 ? CH582_PROFILE_BT_1
+-                                         : keycode == BT2 ? CH582_PROFILE_BT_2
+-                                                          : CH582_PROFILE_BT_3;
+-                    save_bt_profile(slot);
+-                    ch582_set_profile(last_bt_profile);          // tap action: select
+-                    connection_set_host_noeeprom(CONNECTION_HOST_BLUETOOTH);
+-                    display_draw_bluetooth_logo();
+-                    bt_pair_timer = timer_read();                // arm hold-to-pair
+-                    bt_pair_armed = true;
+-                }
+-            } else if (bt_pair_armed) {
+-                bt_pair_armed = false;
+-                if (timer_elapsed(bt_pair_timer) >= BT_PAIR_HOLD_MS)
+-                    ch582_enter_pairing();                        // hold action: pair active slot
++        // Select on press, then start pairing if the same key stays held.
++        case BT1:
++        case BT2:
++        case BT3:
++            if (record->event.pressed && wireless_mode == WL_MODE_BT) {
++                ch582_profile_t slot = CH582_PROFILE_BT_1 + (keycode - BT1);
++                save_bt_profile(slot);
++                ch582_set_profile(last_bt_profile);
++                connection_set_host_noeeprom(CONNECTION_HOST_BLUETOOTH);
++                display_draw_bluetooth_logo();
++                pair_key_down(keycode);
++            } else if (!record->event.pressed) {
++                pair_key_up(keycode);
+             }
+             return false;
+-        case BT24G:  // Fn+R -> select 2.4G (2.4G mode only)
++        case BT24G:
+             if (record->event.pressed && wireless_mode == WL_MODE_24G) {
+                 ch582_set_profile(CH582_PROFILE_PEER_24G);
+                 connection_set_host_noeeprom(CONNECTION_HOST_BLUETOOTH);
+                 display_draw_2_4_g_logo();
++                pair_key_down(keycode);
++            } else if (!record->event.pressed) {
++                pair_key_up(keycode);
+             }
+             return false;
+-        case BT_PAIR:  // Fn+P (long press) -> pair, BT/2.4G modes only
+-            if (record->event.pressed) {
+-                // Arm a long-press only in a wireless mode; ignore in USB.
+-                bt_pair_armed = (wireless_mode != WL_MODE_USB);
+-                bt_pair_timer = timer_read();
+-            } else if (bt_pair_armed) {
+-                bt_pair_armed = false;
+-                if (timer_elapsed(bt_pair_timer) >= BT_PAIR_HOLD_MS) {
+-                    ch582_enter_pairing();
+-                }
++        case BT_PAIR:
++            if (record->event.pressed && wireless_mode != WL_MODE_USB) {
++                pair_key_down(keycode);
++            } else if (!record->event.pressed) {
++                pair_key_up(keycode);
+             }
+             return false;
+         default:
+@@ -452,7 +476,7 @@ void via_custom_value_command_kb(uint8_t *data, uint8_t length) {
          rtc_apply_bytes(&data[3]); // leave data[0] = SET_VALUE -> "handled"
          return;
      }
@@ -100,7 +213,7 @@ index 7e3e46ea..4fbcb60f 100644
          flash_command(data, length);
          return;
      }
-@@ -468,7 +488,7 @@ void via_custom_value_command_kb(uint8_t *data, uint8_t length) {
+@@ -468,7 +492,7 @@ void via_custom_value_command_kb(uint8_t *data, uint8_t length) {
  void raw_hid_receive(uint8_t *data, uint8_t length) {
      if (rtc_is_set_time_cmd(data, length)) {
          rtc_apply_bytes(&data[3]);
@@ -109,7 +222,7 @@ index 7e3e46ea..4fbcb60f 100644
          flash_command(data, length);
      } else if (length >= 2 && data[0] == RTC_SET_VALUE && data[1] == MEDIA_CHANNEL) {
          media_hid_command(data, length);   // now-playing state (channel 0x12)
-@@ -481,7 +501,9 @@ void raw_hid_receive(uint8_t *data, uint8_t length) {
+@@ -481,7 +505,9 @@ void raw_hid_receive(uint8_t *data, uint8_t length) {
  #endif
 
 
@@ -119,7 +232,7 @@ index 7e3e46ea..4fbcb60f 100644
      // Charging LED: on only while actively charging -- CHRG low (active) AND
      // STDBY high (not "done").
      static bool last_chrg = false;
-@@ -490,7 +512,9 @@ static void update_leds(void) {
+@@ -490,7 +516,9 @@ static void update_leds(void) {
          gpio_write_pin(LED_CHARGING_PIN, is_charging);
          last_chrg = is_charging;
      }
@@ -129,7 +242,7 @@ index 7e3e46ea..4fbcb60f 100644
      // Windows Lock LED: mirrors the GUI-lock flag.
      static bool last_winlock = false;
      bool winlock = keymap_config.no_gui;
-@@ -498,7 +522,9 @@ static void update_leds(void) {
+@@ -498,13 +526,16 @@ static void update_leds(void) {
          gpio_write_pin(LED_WINLOCK_PIN, winlock);
          last_winlock = winlock;
      }
@@ -139,7 +252,14 @@ index 7e3e46ea..4fbcb60f 100644
 
  __attribute__((weak)) void display_housekeeping_task(void) {}
 
-@@ -512,7 +538,9 @@ void housekeeping_task_kb(void) {
+ static void kb_sleep_task(void);   // idle-sleep (B-lite) + USB-suspend (A); below
+
+ void housekeeping_task_kb(void) {
++    pair_task();
+
+     // Throttle the housekeeping to 10 Hz
+     static uint32_t last_t = 0;
+@@ -512,7 +543,9 @@ void housekeeping_task_kb(void) {
          last_t = timer_read32();
 
          kb_sleep_task();                  // idle-sleep (B-lite) + USB-suspend (A)
@@ -149,7 +269,7 @@ index 7e3e46ea..4fbcb60f 100644
  #ifdef AK_DEBUG_SUSPEND
          // Diagnostic (uncommitted): expose the two decisive signals on the
          // indicator LEDs so we can see, while the host sleeps, whether the bus
-@@ -521,8 +549,12 @@ void housekeeping_task_kb(void) {
+@@ -521,8 +554,12 @@ void housekeeping_task_kb(void) {
          //   Charging LED (B18) = USB_DRIVER.state == USB_ACTIVE
          // Normal wired use: Charging on, WinLock off. On host sleep, watch which
          // (if either) changes -- tells us the real state the link drops to.
@@ -162,7 +282,7 @@ index 7e3e46ea..4fbcb60f 100644
  #endif
          if (!anim_active()) rtc_task();   // RTC I2C (port A) glitches the flash SPI1 pins (A12/A13) mid-DMA
          anim_task();                      // one animation frame per 100 ms
-@@ -548,8 +580,10 @@ void housekeeping_task_kb(void) {
+@@ -548,8 +585,10 @@ void housekeeping_task_kb(void) {
  #endif
      }
 
@@ -174,7 +294,7 @@ index 7e3e46ea..4fbcb60f 100644
 
      // Kick the watchdog last: a full housekeeping pass completed, so the main
      // loop is alive. A wedge anywhere upstream stops the kicks -> WDT reset.
-@@ -573,21 +607,28 @@ void housekeeping_task_kb(void) {
+@@ -573,21 +612,28 @@ void housekeeping_task_kb(void) {
  //       The MCU keeps scanning, so the waking key still types; the display just
  //       relights one housekeeping tick later.
  static void kb_sleep_task(void) {
@@ -235,7 +355,7 @@ diff --git a/keyboards/a_jazz/ak820pro/graphics/display.h b/keyboards/a_jazz/ak8
 index a3c6f750..d83e1427 100644
 --- a/keyboards/a_jazz/ak820pro/graphics/display.h
 +++ b/keyboards/a_jazz/ak820pro/graphics/display.h
-@@ -5,6 +5,17 @@
+@@ -5,6 +5,18 @@
  #include <stdbool.h>
  #include "rtc/rtc.h"
 
@@ -245,6 +365,7 @@ index a3c6f750..d83e1427 100644
 +void display_set_backlight_level(uint8_t level);
 +uint32_t display_idle_timeout_ms(void);
 +void display_pump_ak650(void);
++bool display_ak650_needs_redraw(void);
 +void display_send_ak650_slice(void);
 +void display_render_ak650_dashboard(painter_device_t panel, painter_font_handle_t large, painter_font_handle_t small,
 +                                   bool mac, uint8_t connection, bool media, bool force);
@@ -551,7 +672,7 @@ index 7e70408f..1a8c5386 100644
      draw_conn_number(false);      // ~10 Hz for the blink; self-guarded
 
      // Switch views (media started/stopped) -> repaint only the content zone; the
-@@ -453,34 +543,51 @@ void display_housekeeping_task(void) {
+@@ -453,34 +543,53 @@ void display_housekeeping_task(void) {
      }
 
      if (drew) qp_flush(qp_display);
@@ -560,7 +681,9 @@ index 7e70408f..1a8c5386 100644
 
 +#ifdef AK650_DASHBOARD
 +void display_pump_ak650(void) {
-+    if (splash_cleared && !display_paused && display_powered) display_send_ak650_slice();
++    if (!splash_cleared || display_paused || !display_powered) return;
++    if (display_ak650_needs_redraw()) display_housekeeping_task();
++    display_send_ak650_slice();
 +}
 +#endif
 +
@@ -603,3 +726,18 @@ index 7e70408f..1a8c5386 100644
          qp_drawimage(qp_display, 32, 0, qp_2_4g_logo);
 +#endif
  }
+diff --git a/keyboards/a_jazz/ak820pro/mcuconf.h b/keyboards/a_jazz/ak820pro/mcuconf.h
+--- a/keyboards/a_jazz/ak820pro/mcuconf.h
++++ b/keyboards/a_jazz/ak820pro/mcuconf.h
+@@ -59,6 +59,11 @@
+ #undef SN32_PWM_CT16B0_IRQ_PRIORITY
+ #define SN32_PWM_CT16B0_IRQ_PRIORITY 3
+ #undef SN32_PWM_CT16B1_IRQ_PRIORITY
++#ifdef AK650_DASHBOARD
++// Let the AK650 RGB row scan preempt SPI0 while keeping UART2 highest.
++#define SN32_PWM_CT16B1_IRQ_PRIORITY 2
++#else
+ #define SN32_PWM_CT16B1_IRQ_PRIORITY 3
++#endif
+ #undef SN32_PWM_CT16B2_IRQ_PRIORITY
+ #define SN32_PWM_CT16B2_IRQ_PRIORITY 3

@@ -230,6 +230,26 @@
             "name": "SCR_MEDIA",
             "title": "Force the clock vs the now-playing view (toggle)",
             "shortName": "Media"
+        },
+        {
+            "name": "AK650_FN_ESC",
+            "title": "Grave / Shift: toggle number row",
+            "shortName": "Grave/Fn"
+        },
+        {
+            "name": "AK650_RESET",
+            "title": "Restore defaults (hold 3 seconds)",
+            "shortName": "Reset"
+        },
+        {
+            "name": "AK650_ZH",
+            "title": "Screen language: Chinese",
+            "shortName": "Chinese"
+        },
+        {
+            "name": "AK650_EN",
+            "title": "Screen language: English",
+            "shortName": "English"
         }
     ]
 }

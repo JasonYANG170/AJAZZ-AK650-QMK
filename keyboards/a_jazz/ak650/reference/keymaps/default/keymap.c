@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include QMK_KEYBOARD_H
-#include "ak820pro.h"
+#include "ak650.h"
 
 enum layers {
     WIN_BASE,
@@ -17,11 +17,11 @@ enum layers {
     KC_LCTL, gui,     alt,                      KC_SPC,                    right_alt, MO(fn),                  KC_LEFT, KC_DOWN, KC_RGHT)
 
 #define AK650_FN LAYOUT_67_ansi( \
-    KC_GRV,  KC_F1,   KC_F2,   KC_F3,   KC_F4,   KC_F5,   KC_F6,   KC_F7,   KC_F8,   KC_F9,   KC_F10,  KC_F11,  KC_F12,  _______, SCR_TOG, \
+    AK650_FN_ESC, KC_F1, KC_F2, KC_F3, KC_F4, KC_F5, KC_F6, KC_F7, KC_F8, KC_F9, KC_F10, KC_F11, KC_F12, _______, SCR_TOG, \
     _______, BT1,     BT2,     BT3,     BT24G,   BT_PAIR,  _______, _______, KC_PSCR, KC_SCRL, KC_PAUS, RM_SPDU, RM_SPDD, RM_NEXT, _______, \
     _______, _______, _______, _______, _______, _______, _______, KC_HOME, KC_END,  KC_DEL,  _______, _______, _______, _______,          \
-    _______, _______, RM_TOGG, _______, _______, _______, SCR_TOG, _______, _______, _______, _______, _______, RM_VALU, _______,          \
-    _______, GU_TOGG, _______,                   _______,                    _______, _______,                  _______, RM_VALD, RM_HUEU)
+    _______, _______, RM_TOGG, AK650_ZH, AK650_EN, _______, SCR_TOG, _______, _______, _______, _______, _______, RM_VALU, _______,         \
+    _______, GU_TOGG, _______,                   AK650_RESET,                _______, _______,                  _______, RM_VALD, RM_HUEU)
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [WIN_BASE] = AK650_BASE(KC_LGUI, KC_LALT, KC_RALT, WIN_FN),
